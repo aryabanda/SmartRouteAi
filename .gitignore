@@ -1,0 +1,18 @@
+# Root Node
+node_modules/
+package-lock.json
+
+# React Native
+mobile/node_modules/
+mobile/.env
+
+# Python
+ai/.venv/
+ai/venv/
+ai/__pycache__/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
