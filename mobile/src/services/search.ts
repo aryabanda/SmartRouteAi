@@ -12,7 +12,7 @@ export async function searchPlace(
   if (!query.trim()) return [];
 
   try {
-    console.log("calling backend");
+     console.log("calling backend");
     console.log("Calling:", `${BACKEND_URL}/api/search`);
     const response = await axios.get(`${BACKEND_URL}/api/search`, {
       params: {
