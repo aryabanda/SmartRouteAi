@@ -6,6 +6,7 @@ import JourneyScreen from '../screens/Journey/JourneyScreen';
 import AIScreen from '../screens/AI/AIScreen';
 import HistoryScreen from '../screens/History/HistoryScreen';
 import ProfileScreen from '../screens/Profile/ProfileScreen';
+import EmergencyContactsScreen from '../screens/Contacts/EmergencyContactsScreen';
 
 import Icon from 'react-native-vector-icons/Ionicons';
 
@@ -38,7 +39,7 @@ export default function BottomNavigator() {
               iconName = 'map';
               break;
 
-            case 'AI':
+            case 'SOS contacts':
               iconName = 'sparkles';
               break;
 
@@ -62,7 +63,7 @@ export default function BottomNavigator() {
       })}>
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Journey" component={JourneyScreen} />
-      <Tab.Screen name="AI" component={AIScreen} />
+      <Tab.Screen name="Sos contacts" component={EmergencyContactsScreen} />
       <Tab.Screen name="History" component={HistoryScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>

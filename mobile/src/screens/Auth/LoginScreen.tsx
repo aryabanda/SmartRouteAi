@@ -1,11 +1,33 @@
 import React, {useState} from 'react';
-import {View, StyleSheet, TouchableOpacity} from 'react-native';
+import {View, StyleSheet, TouchableOpacity, Alert} from 'react-native';
 import {Text, TextInput} from 'react-native-paper';
 import PrimaryButton from '../../components/buttons/PrimaryButton';
+import {useAuth} from '../../context/AuthContext';
 
 export default function LoginScreen({navigation}: any) {
+  const {login} = useAuth();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      Alert.alert('Missing info', 'Enter both your email and password.');
+      return;
+    }
+    if (submitting) return; // guard against double-tap while a request is in flight
+
+    setSubmitting(true);
+    try {
+      await login(email, password);
+      navigation.replace('Main');
+    } catch (err: any) {
+      Alert.alert('Login failed', err.message ?? 'Unknown error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -23,6 +45,8 @@ export default function LoginScreen({navigation}: any) {
         mode="outlined"
         value={email}
         onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
         style={styles.input}
       />
 
@@ -36,8 +60,8 @@ export default function LoginScreen({navigation}: any) {
       />
 
       <PrimaryButton
-        title="Login"
-        onPress={() => navigation.replace('Main')}
+        title={submitting ? 'Logging in...' : 'Login'}
+        onPress={handleLogin}
       />
 
       <TouchableOpacity

@@ -5,26 +5,23 @@ import React, {
   useState,
   ReactNode,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {useAuth} from './AuthContext';
 
-// npm install @react-native-async-storage/async-storage
-// (then `cd android && ./gradlew clean` once, since it has native code)
+// Same LAN-IP caveat as the other services - keep in sync with route.ts/search.ts/auth.ts.
+const BACKEND_URL = 'http://localhost:4000';
 
 export type EmergencyContact = {
   id: string;
   name: string;
-  phone: string; // E.164 format recommended, e.g. +919876543210
+  phone: string;
 };
-
-const STORAGE_KEY = 'emergency_contacts_v1';
-const MAX_CONTACTS = 5;
 
 type ContactsContextValue = {
   contacts: EmergencyContact[];
   loading: boolean;
   addContact: (name: string, phone: string) => Promise<void>;
   removeContact: (id: string) => Promise<void>;
-  updateContact: (id: string, name: string, phone: string) => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
 const ContactsContext = createContext<ContactsContextValue | undefined>(
@@ -32,57 +29,74 @@ const ContactsContext = createContext<ContactsContextValue | undefined>(
 );
 
 export function ContactsProvider({children}: {children: ReactNode}) {
+  const {token} = useAuth();
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (raw) setContacts(JSON.parse(raw));
-      } catch (err) {
-        console.warn('Failed to load emergency contacts:', err);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+  const authHeaders = () => ({
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  });
 
-  const persist = async (next: EmergencyContact[]) => {
-    setContacts(next);
+  const refresh = async () => {
+    if (!token) {
+      setContacts([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      const res = await fetch(`${BACKEND_URL}/api/contacts`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error(`Failed to load contacts (${res.status})`);
+      const data = await res.json();
+      setContacts(data.contacts);
     } catch (err) {
-      console.warn('Failed to save emergency contacts:', err);
+      console.warn('Failed to load contacts:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
+  // Reload contacts whenever the logged-in user changes (login, logout,
+  // or session restored on app launch).
+  useEffect(() => {
+    refresh();
+  }, [token]);
+
   const addContact = async (name: string, phone: string) => {
-    if (contacts.length >= MAX_CONTACTS) {
-      throw new Error(`You can only add up to ${MAX_CONTACTS} contacts.`);
-    }
-    const next = [
-      ...contacts,
-      {id: `${Date.now()}`, name: name.trim(), phone: phone.trim()},
-    ];
-    await persist(next);
+    if (!token) throw new Error('You must be logged in to add contacts.');
+
+    const res = await fetch(`${BACKEND_URL}/api/contacts`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({name, phone}),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? 'Failed to add contact.');
+
+    setContacts(prev => [...prev, body.contact]);
   };
 
   const removeContact = async (id: string) => {
-    await persist(contacts.filter(c => c.id !== id));
-  };
+    if (!token) throw new Error('You must be logged in to remove contacts.');
 
-  const updateContact = async (id: string, name: string, phone: string) => {
-    await persist(
-      contacts.map(c =>
-        c.id === id ? {...c, name: name.trim(), phone: phone.trim()} : c,
-      ),
-    );
+    const res = await fetch(`${BACKEND_URL}/api/contacts/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? 'Failed to remove contact.');
+    }
+
+    setContacts(prev => prev.filter(c => c.id !== id));
   };
 
   return (
     <ContactsContext.Provider
-      value={{contacts, loading, addContact, removeContact, updateContact}}
+      value={{contacts, loading, addContact, removeContact, refresh}}
     >
       {children}
     </ContactsContext.Provider>

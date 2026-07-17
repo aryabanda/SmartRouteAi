@@ -76,7 +76,7 @@ export default function EmergencyContactsScreen() {
         />
         <TextInput
           style={styles.input}
-          placeholder="Phone (e.g. +919876543210)"
+          placeholder="Phone"
           placeholderTextColor="#9CA3AF"
           value={phone}
           onChangeText={setPhone}

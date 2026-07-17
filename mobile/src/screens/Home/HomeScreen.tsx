@@ -7,8 +7,13 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import {useAppLocation} from '../../context/LocationContext';
+import JourneyScreen from '../Journey/JourneyScreen';
+import { useNavigation } from '@react-navigation/native';
+
+
 
 export default function HomeScreen() {
+  const navigation=useNavigation<any>();
       const location = useAppLocation();
   return (
     <SafeAreaView style={styles.container}>
@@ -43,7 +48,7 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      <TouchableOpacity style={styles.button}>
+      <TouchableOpacity style={styles.button} onPress={()=> navigation.navigate("Journey")}>
         <Text style={styles.buttonText}>
           Start New Journey
         </Text>

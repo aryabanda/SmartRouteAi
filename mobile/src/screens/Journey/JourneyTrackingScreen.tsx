@@ -759,10 +759,10 @@ const remainingGeoJSON: GeoJSON.Feature = {
 
           <Text>
             {deviationStatus === 'deviated'
-              ? 'âš  Deviation Confirmed'
+              ? ' Deviation Confirmed'
               : deviationStatus === 'monitoring'
-              ? 'â€¦ Monitoring Possible Deviation'
-              : 'âœ“ No Deviation'}
+              ? ' Monitoring Possible Deviation'
+              : ' No Deviation'}
           </Text>
 
           <Text>âœ“ Traffic Normal</Text>
