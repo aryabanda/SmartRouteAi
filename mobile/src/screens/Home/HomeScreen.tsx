@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import {useAppLocation} from '../../context/LocationContext';
-import JourneyScreen from '../Journey/JourneyScreen';
 import { useNavigation } from '@react-navigation/native';
 
 
