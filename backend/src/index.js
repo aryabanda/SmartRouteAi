@@ -6,6 +6,7 @@ import {deviationRouter} from './routes/deviation.js';
 import {searchRouter} from './routes/search.js';
 import {authRouter} from './routes/auth.js';
 import {contactsRouter} from './routes/contacts.js';
+import {journeysRouter} from './routes/journeys.js';
 import {initDb} from './db/index.js';
 
 const app = express();
@@ -20,6 +21,7 @@ app.use('/api/deviation', deviationRouter);
 app.use('/api/search', searchRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/contacts', contactsRouter);
+app.use('/api/journeys', journeysRouter);
 
 const PORT = process.env.PORT || 4000;
 

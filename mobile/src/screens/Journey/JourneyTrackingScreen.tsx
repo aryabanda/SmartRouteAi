@@ -11,7 +11,9 @@ import {
 
 import {useAppLocation} from '../../context/LocationContext';
 import {useContacts} from '../../context/ContactsContext';
+import {useAuth} from '../../context/AuthContext';
 import {sendSOS} from '../../services/sos';
+import {createJourney, endJourney} from '../../services/journeys';
 import {useNavigation} from '@react-navigation/native';
 import {recalculateRoute, classifyDeviation} from '../../services/route';
 import {CameraRef} from '@maplibre/maplibre-react-native';
@@ -192,13 +194,6 @@ export default function JourneyTrackingScreen({route}: any) {
     selectedPlace,
   } = route.params ?? {};
   const [routeInfo, setRouteInfo] = useState(initialRouteInfo);
-  const [completedRoute, setCompletedRoute] = useState<Coord[]>([]);
-const [remainingRoute, setRemainingRoute] = useState<Coord[]>(
-  routeInfo?.coordinates ?? [],
-);
-
-const lastNearestIndex = useRef(0);
-
   const [distanceLeft, setDistanceLeft] = useState(
     initialRouteInfo?.distance ?? 0,
   );
@@ -230,6 +225,54 @@ const lastNearestIndex = useRef(0);
 
   const navigation = useNavigation<any>();
   const {contacts} = useContacts();
+  const {token} = useAuth();
+
+  // ---- Journey history logging ----
+  const journeyIdRef = useRef<string | null>(null);
+  const deviationCountRef = useRef(0);
+  const sosTriggeredRef = useRef(false);
+  const journeyLogStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      journeyLogStartedRef.current ||
+      !token ||
+      !location ||
+      !destination ||
+      !routeInfo
+    ) {
+      return;
+    }
+    journeyLogStartedRef.current = true;
+
+    createJourney(token, {
+      destination,
+      origin: {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      },
+      destinationCoords: selectedPlace?.center
+        ? {latitude: selectedPlace.center[1], longitude: selectedPlace.center[0]}
+        : undefined,
+      distanceKm: routeInfo?.distance,
+      durationMin: routeInfo?.duration,
+    })
+      .then(({journey}) => {
+        journeyIdRef.current = journey.id;
+      })
+      .catch(err => {
+        console.warn('Failed to log journey start:', err.message);
+      });
+    // Deliberately runs once - re-running on every routeInfo/location update
+    // (e.g. after a silent reroute) would create duplicate journey rows.
+  }, [token, location, destination, routeInfo]);
+
+  const finishJourneyLog = (status: 'completed' | 'sos_triggered') => {
+    if (!token || !journeyIdRef.current) return;
+    endJourney(token, journeyIdRef.current, status, deviationCountRef.current).catch(
+      err => console.warn('Failed to log journey end:', err.message),
+    );
+  };
 
   // Prevents spamming contacts with repeat SMS if the deviation/checkpoint
   // condition stays true across multiple checks - one SOS per triggered
@@ -267,6 +310,9 @@ const lastNearestIndex = useRef(0);
         reason,
         destination,
       );
+      sosTriggeredRef.current = true;
+      finishJourneyLog('sos_triggered');
+
       const failed = results.filter(r => !r.success);
       if (failed.length > 0) {
         Alert.alert(
@@ -294,29 +340,16 @@ const lastNearestIndex = useRef(0);
     });
   };
 
-  const completedGeoJSON: GeoJSON.Feature = {
-  type: 'Feature',
-  properties: {},
-  geometry: {
-    type: 'LineString',
-    coordinates: completedRoute.map(p => [
-      p.longitude,
-      p.latitude,
-    ]),
-  },
-};
-
-const remainingGeoJSON: GeoJSON.Feature = {
-  type: 'Feature',
-  properties: {},
-  geometry: {
-    type: 'LineString',
-    coordinates: remainingRoute.map(p => [
-      p.longitude,
-      p.latitude,
-    ]),
-  },
-};
+  const routeGeoJSON: GeoJSON.Feature = {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'LineString',
+      coordinates:
+        routeInfo?.coordinates?.map((p: any) => [p.longitude, p.latitude]) ??
+        [],
+    },
+  };
 
   // One-time camera centering the first time we get a GPS fix.
   useEffect(() => {
@@ -356,43 +389,7 @@ const remainingGeoJSON: GeoJSON.Feature = {
 
     setEta(distanceLeft / speedKmPerMin);
   }, [distanceLeft, location]);
-  useEffect(() => {
-  if (!location || !routeInfo?.coordinates?.length) return;
 
-  let nearestIndex = lastNearestIndex.current;
-  let nearestDistance = Infinity;
-
-  // Only search forward instead of the whole route
-  for (
-    let i = lastNearestIndex.current;
-    i < routeInfo.coordinates.length;
-    i++
-  ) {
-    const point = routeInfo.coordinates[i];
-
-    const d = calculateDistance(
-      location.coords.latitude,
-      location.coords.longitude,
-      point.latitude,
-      point.longitude,
-    );
-
-    if (d < nearestDistance) {
-      nearestDistance = d;
-      nearestIndex = i;
-    }
-  }
-
-  lastNearestIndex.current = nearestIndex;
-
-  setCompletedRoute(
-    routeInfo.coordinates.slice(0, nearestIndex + 1),
-  );
-
-  setRemainingRoute(
-    routeInfo.coordinates.slice(nearestIndex),
-  );
-}, [location, routeInfo]);
   useEffect(() => {
     if (!location) return;
 
@@ -483,6 +480,7 @@ const remainingGeoJSON: GeoJSON.Feature = {
 
     if (offRouteDuration >= DEVIATION_CONFIRM_MS && !classifyingRef.current) {
       setDeviationStatus('deviated');
+      deviationCountRef.current += 1;
       classifyingRef.current = true;
 
       const speedKph = (location.coords.speed ?? 0) * 3.6;
@@ -611,7 +609,7 @@ const remainingGeoJSON: GeoJSON.Feature = {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView scrollEnabled={scrollEnabled}>
-        <Text style={styles.heading}>ðŸš— Journey in Progress</Text>
+        <Text style={styles.heading}>🚗 Journey in Progress</Text>
 
         <View
           style={styles.mapContainer}
@@ -622,7 +620,7 @@ const remainingGeoJSON: GeoJSON.Feature = {
           <Map style={styles.map} mapStyle={MAP_STYLE_URL}>
             <Camera ref={cameraRef} />
 
-            
+            <UserLocation />
 
             {selectedPlace && (
               <Marker
@@ -662,42 +660,21 @@ const remainingGeoJSON: GeoJSON.Feature = {
             ))}
 
             {routeInfo?.coordinates && (
-  <>
-    <GeoJSONSource
-      id="completedRoute"
-      data={completedGeoJSON}
-    >
-      <Layer
-        id="completedLine"
-        type="line"
-        style={{
-          lineColor: '#9CA3AF',
-          lineWidth: 6,
-          lineOpacity: 0.45,
-        }}
-      />
-    </GeoJSONSource>
-
-    <GeoJSONSource
-      id="remainingRoute"
-      data={remainingGeoJSON}
-    >
-      <Layer
-        id="remainingLine"
-        type="line"
-        style={{
-          lineColor: '#2563EB',
-          lineWidth: 6,
-        }}
-      />
-    </GeoJSONSource>
-  </>
-)}
-<UserLocation />
+              <GeoJSONSource id="route" data={routeGeoJSON}>
+                <Layer
+                  id="route-line"
+                  type="line"
+                  style={{
+                    lineColor: '#2563EB',
+                    lineWidth: 6,
+                  }}
+                />
+              </GeoJSONSource>
+            )}
           </Map>
 
           <TouchableOpacity style={styles.recenterButton} onPress={recenter}>
-            <Text style={styles.recenterText}>ðŸ“</Text>
+            <Text style={styles.recenterText}>📍</Text>
           </TouchableOpacity>
         </View>
 
@@ -748,10 +725,10 @@ const remainingGeoJSON: GeoJSON.Feature = {
         </View>
 
         <View style={styles.aiCard}>
-          <Text style={styles.aiTitle}>ðŸ¤– AI Status</Text>
+          <Text style={styles.aiTitle}>🤖 AI Status</Text>
 
           <Text>
-            {deviationStatus === 'on_route' ? 'âœ“' : 'âš '} On Route
+            {deviationStatus === 'on_route' ? '✓' : '⚠'} On Route
             {deviationStatus !== 'on_route'
               ? ` (${distanceFromRoute.toFixed(0)}m off)`
               : ''}
@@ -759,13 +736,13 @@ const remainingGeoJSON: GeoJSON.Feature = {
 
           <Text>
             {deviationStatus === 'deviated'
-              ? ' Deviation Confirmed'
+              ? '⚠ Deviation Confirmed'
               : deviationStatus === 'monitoring'
-              ? ' Monitoring Possible Deviation'
-              : ' No Deviation'}
+              ? '… Monitoring Possible Deviation'
+              : '✓ No Deviation'}
           </Text>
 
-          <Text>âœ“ Traffic Normal</Text>
+          <Text>✓ Traffic Normal</Text>
         </View>
 
         <TouchableOpacity
@@ -785,12 +762,17 @@ const remainingGeoJSON: GeoJSON.Feature = {
             );
           }}
         >
-          <Text style={styles.sosText}>ðŸš¨ Emergency SOS</Text>
+          <Text style={styles.sosText}>🚨 Emergency SOS</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.endButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            if (!sosTriggeredRef.current) {
+              finishJourneyLog('completed');
+            }
+            navigation.goBack();
+          }}
         >
           <Text style={styles.sosText}>End Journey</Text>
         </TouchableOpacity>
