@@ -6,8 +6,7 @@
 // pairs - no polyline decoding needed, unlike Google's encoded polyline.
 
 const ORS_DIRECTIONS_URL =
-  'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
-
+  'https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson';
 /**
  * @param {{latitude:number, longitude:number}} origin
  * @param {{latitude:number, longitude:number}} destination
