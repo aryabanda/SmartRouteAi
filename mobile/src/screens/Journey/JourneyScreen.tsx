@@ -6,6 +6,8 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 
 import {useAppLocation} from '../../context/LocationContext';
@@ -20,6 +22,7 @@ const location = useAppLocation();
 }, [location]);
 
 const [routeInfo, setRouteInfo] = useState<any>(null);
+const [routeLoading, setRouteLoading] = useState(false);
 
 const [selectedPlace, setSelectedPlace] = useState<any>(null);
 
@@ -73,17 +76,25 @@ useEffect(() => {
         if (!location) return;
         setDestination(item.place_name);
         setSelectedPlace(item);
+        setRouteInfo(null);
+        setRouteLoading(true);
 
-        if (!location) return;
-
-        const route = await getRoute(
-  {latitude: location.coords.latitude, longitude: location.coords.longitude},
-  {latitude: item.center[1], longitude: item.center[0]},
-);
-        console.log("Route Response:", route);
-
-
-        setRouteInfo(route);
+        try {
+          const route = await getRoute(
+            {latitude: location.coords.latitude, longitude: location.coords.longitude},
+            {latitude: item.center[1], longitude: item.center[0]},
+          );
+          console.log("Route Response:", route);
+          setRouteInfo(route);
+        } catch (err: any) {
+          console.log("Route fetch failed:", err);
+          Alert.alert(
+            'Could not calculate route',
+            err.message ?? 'The routing service may be temporarily unavailable. Try again in a moment.',
+          );
+        } finally {
+          setRouteLoading(false);
+        }
       },
     })
   }
@@ -118,20 +129,28 @@ useEffect(() => {
       <View style={styles.infoCard}>
         <View style={styles.row}>
           <Text>Distance</Text>
-          <Text>
-  {routeInfo
-    ? `${routeInfo.distance.toFixed(1)} km`
-    : '-- km'}
-</Text>
+          {routeLoading ? (
+            <ActivityIndicator size="small" color="#2563EB" />
+          ) : (
+            <Text>
+              {routeInfo
+                ? `${routeInfo.distance.toFixed(1)} km`
+                : '-- km'}
+            </Text>
+          )}
         </View>
 
         <View style={styles.row}>
           <Text>ETA</Text>
-          <Text>
-  {routeInfo
-    ? `${routeInfo.duration.toFixed(0)} mins`
-    : '-- mins'}
-</Text>
+          {routeLoading ? (
+            <ActivityIndicator size="small" color="#2563EB" />
+          ) : (
+            <Text>
+              {routeInfo
+                ? `${routeInfo.duration.toFixed(0)} mins`
+                : '-- mins'}
+            </Text>
+          )}
         </View>
 
         <View style={styles.row}>
