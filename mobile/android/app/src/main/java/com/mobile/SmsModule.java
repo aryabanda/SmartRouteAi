@@ -1,4 +1,4 @@
-package com.smartrouteai; // <-- replace with your actual applicationId from android/app/build.gradle
+package com.mobile;
 
 import android.telephony.SmsManager;
 import com.facebook.react.bridge.Promise;

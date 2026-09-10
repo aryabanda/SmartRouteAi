@@ -2,10 +2,30 @@
 // (distance-from-route over threshold for a sustained window), whether it
 // looks like a deliberate detour or something to treat as suspicious.
 //
-// This is intentionally rule-based for now - see the AI HOOK comment below
-// for exactly where a trained model (Isolation Forest / classifier over
-// logged journeys) would replace it later. Keeping the interface stable
-// means swapping the internals doesn't require any mobile-app changes.
+// Primary path: calls the Python AI service (ai_service/main.py), which
+// serves predictions from a trained Isolation Forest. Falls back to the
+// rule-based logic below if that service is unreachable, times out, or
+// hasn't been trained yet (see ai_service/README.md) - this keeps the
+// safety-critical path working even if the AI service is down, which
+// matters a lot more for a safety app than for most ML integrations.
+
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:5001';
+const AI_SERVICE_TIMEOUT_MS = 3000;
+
+async function callAiService(features) {
+  const res = await fetch(`${AI_SERVICE_URL}/predict`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(features),
+    signal: AbortSignal.timeout(AI_SERVICE_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    throw new Error(`AI service returned ${res.status}`);
+  }
+
+  return res.json();
+}
 
 /**
  * @param {object} features
@@ -14,21 +34,9 @@
  * @param {number} features.headingChangeDeg    change in bearing since deviation started, degrees
  * @param {number} features.timeOffRouteMs      how long they've been off-route, ms
  */
-export function classifyDeviation(features) {
+function ruleBasedClassify(features) {
   const {distanceFromRoute, speedKph, headingChangeDeg, timeOffRouteMs} =
     features;
-
-  // ---- AI HOOK ----
-  // Once you have logged journeys (normal + deviated), train an Isolation
-  // Forest / One-Class SVM on vectors like
-  // [distanceFromRoute, speedKph, headingChangeDeg, timeOffRouteMs] and
-  // call it here instead of the rules below, e.g.:
-  //
-  //   const score = await model.predict([distanceFromRoute, speedKph, headingChangeDeg, timeOffRouteMs]);
-  //   if (score > SUSPICIOUS_THRESHOLD) return { label: 'suspicious', confidence: score, reason: 'model' };
-  //
-  // Rules below are the safety-critical fallback and should stay even after
-  // a model is added, in case the model is unavailable or unsure.
 
   // Very low speed while off-route: could mean stopped, parked somewhere
   // unplanned, or in distress. Treat cautiously.
@@ -36,7 +44,7 @@ export function classifyDeviation(features) {
     return {
       label: 'suspicious',
       confidence: 0.8,
-      reason: 'Stationary or near-stationary while off planned route.',
+      reason: 'Stationary or near-stationary while off planned route (rule-based fallback).',
     };
   }
 
@@ -51,7 +59,7 @@ export function classifyDeviation(features) {
     return {
       label: 'intentional_reroute',
       confidence: 0.75,
-      reason: 'Steady movement with a deliberate-looking turn, moderate distance from route.',
+      reason: 'Steady movement with a deliberate-looking turn, moderate distance from route (rule-based fallback).',
     };
   }
 
@@ -60,7 +68,7 @@ export function classifyDeviation(features) {
     return {
       label: 'suspicious',
       confidence: 0.7,
-      reason: 'Distance from planned route is large.',
+      reason: 'Distance from planned route is large (rule-based fallback).',
     };
   }
 
@@ -69,6 +77,17 @@ export function classifyDeviation(features) {
   return {
     label: 'suspicious',
     confidence: 0.5,
-    reason: 'Ambiguous deviation pattern; defaulting to caution.',
+    reason: 'Ambiguous deviation pattern; defaulting to caution (rule-based fallback).',
   };
+}
+
+export async function classifyDeviation(features) {
+  try {
+    return await callAiService(features);
+  } catch (err) {
+    console.warn(
+      `AI service unavailable (${err.message}), falling back to rule-based classification.`,
+    );
+    return ruleBasedClassify(features);
+  }
 }

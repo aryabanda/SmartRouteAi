@@ -5,7 +5,7 @@ export const deviationRouter = Router();
 
 // POST /api/deviation/classify
 // body: { distanceFromRoute, speedKph, headingChangeDeg, timeOffRouteMs }
-deviationRouter.post('/classify', (req, res) => {
+deviationRouter.post('/classify', async (req, res) => {
   const {distanceFromRoute, speedKph, headingChangeDeg, timeOffRouteMs} =
     req.body ?? {};
 
@@ -21,7 +21,7 @@ deviationRouter.post('/classify', (req, res) => {
     });
   }
 
-  const result = classifyDeviation({
+  const result = await classifyDeviation({
     distanceFromRoute,
     speedKph,
     headingChangeDeg,

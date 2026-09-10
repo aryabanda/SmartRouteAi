@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allows plain HTTP (not HTTPS) to these specific hosts only - needed
+         because your backend runs on http://localhost or a LAN IP during
+         development, and Android blocks all cleartext traffic by default
+         since API 28. Production builds should use HTTPS instead of this. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <!-- Add your LAN IP too, in case you switch back from USB/adb reverse to Wi-Fi -->
+        <domain includeSubdomains="true">192.168.29.252</domain>
+    </domain-config>
+</network-security-config>

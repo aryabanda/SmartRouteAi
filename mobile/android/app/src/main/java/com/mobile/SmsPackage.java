@@ -1,4 +1,4 @@
-package com.smartrouteai; // <-- match the package used in SmsModule.java
+package com.mobile;
 
 import com.facebook.react.ReactPackage;
 import com.facebook.react.bridge.NativeModule;

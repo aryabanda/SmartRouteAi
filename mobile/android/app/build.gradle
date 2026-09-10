@@ -84,6 +84,12 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        // Explicitly defined here so ${usesCleartextTraffic} in the manifest
+        // always resolves to something, regardless of any other config this
+        // project may or may not have elsewhere. Overridden per build type
+        // below (debug allows it for local dev against your backend, release
+        // should not).
+        manifestPlaceholders = [usesCleartextTraffic: "true"]
     }
     signingConfigs {
     debug {
@@ -105,11 +111,13 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
     signingConfig signingConfigs.release
     minifyEnabled enableProguardInReleaseBuilds
     proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+    manifestPlaceholders = [usesCleartextTraffic: "false"]
 }
     }
 }
