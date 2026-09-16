@@ -13,7 +13,7 @@ import {useAppLocation} from '../../context/LocationContext';
 import {useContacts} from '../../context/ContactsContext';
 import {useAuth} from '../../context/AuthContext';
 import {sendSOS} from '../../services/sos';
-import {createJourney, endJourney} from '../../services/journeys';
+import {createJourney, endJourney, logLocation} from '../../services/journeys';
 import {useNavigation} from '@react-navigation/native';
 import {recalculateRoute, classifyDeviation} from '../../services/route';
 import {CameraRef} from '@maplibre/maplibre-react-native';
@@ -192,7 +192,9 @@ export default function JourneyTrackingScreen({route}: any) {
     destination,
     routeInfo: initialRouteInfo,
     selectedPlace,
+    navigationMode = 'automatic',
   } = route.params ?? {};
+  const isManualMode = navigationMode === 'manual';
   const [routeInfo, setRouteInfo] = useState(initialRouteInfo);
   const [distanceLeft, setDistanceLeft] = useState(
     initialRouteInfo?.distance ?? 0,
@@ -232,6 +234,18 @@ export default function JourneyTrackingScreen({route}: any) {
   const deviationCountRef = useRef(0);
   const sosTriggeredRef = useRef(false);
   const journeyLogStartedRef = useRef(false);
+  const lastPingLoggedAtRef = useRef(0);
+
+  // Adaptive instead of fixed: a stationary phone generates no new trail
+  // information between pings, so logging it every 15s is wasted battery
+  // and backend calls for zero benefit. Scales the interval up when slow
+  // and down when moving fast, where fresh position data actually matters
+  // more (e.g. for catching a fast-developing deviation sooner).
+  function pingIntervalForSpeed(speedKph: number): number {
+    if (speedKph < 2) return 45000; // stationary/parked - rarely worth a fresh ping
+    if (speedKph < 15) return 20000; // walking pace
+    return 10000; // driving - deviations develop faster, check in sooner
+  }
 
   useEffect(() => {
     if (
@@ -447,6 +461,25 @@ export default function JourneyTrackingScreen({route}: any) {
     const dist = distanceToRouteMeters(currentCoord, routeInfo.coordinates);
     setDistanceFromRoute(dist);
 
+    // Piggybacks on this effect since it already runs on every location
+    // update and already has dist computed - throttled so a whole journey
+    // doesn't hammer the backend with a request per GPS tick.
+    const now = Date.now();
+    const currentSpeedKph = (location.coords.speed ?? 0) * 3.6;
+    if (
+      token &&
+      journeyIdRef.current &&
+      now - lastPingLoggedAtRef.current >= pingIntervalForSpeed(currentSpeedKph)
+    ) {
+      lastPingLoggedAtRef.current = now;
+      logLocation(token, journeyIdRef.current, {
+        latitude: currentCoord.latitude,
+        longitude: currentCoord.longitude,
+        speedKph: (location.coords.speed ?? 0) * 3.6,
+        distanceFromRouteM: dist,
+      }).catch(() => {}); // fire-and-forget, see logLocation's own comment
+    }
+
     if (dist <= DEVIATION_THRESHOLD_METERS) {
       offRouteSinceRef.current = null;
       headingAtDeviationStartRef.current = null;
@@ -482,6 +515,38 @@ export default function JourneyTrackingScreen({route}: any) {
       setDeviationStatus('deviated');
       deviationCountRef.current += 1;
       classifyingRef.current = true;
+
+      // Manual mode: never auto-reroute, auto-classify, or start an SOS
+      // countdown silently. Ask the user directly and act only on their
+      // answer - this is the whole point of "manual" as opposed to
+      // "automatic" navigation mode.
+      if (isManualMode) {
+        Alert.alert(
+          "You've gone off the planned route",
+          'Are you doing this on purpose?',
+          [
+            {
+              text: "I'm fine, continue",
+              onPress: () => {
+                offRouteSinceRef.current = null;
+                headingAtDeviationStartRef.current = null;
+                setDeviationStatus('on_route');
+                classifyingRef.current = false;
+              },
+            },
+            {
+              text: 'I need help',
+              style: 'destructive',
+              onPress: () => {
+                triggerSOS('route_deviation');
+                classifyingRef.current = false;
+              },
+            },
+          ],
+          {cancelable: false},
+        );
+        return;
+      }
 
       const speedKph = (location.coords.speed ?? 0) * 3.6;
       // Prefer the device's own compass/course heading when GPS provides
@@ -590,11 +655,28 @@ export default function JourneyTrackingScreen({route}: any) {
 
     if (overdue && overdueAlertShownForRef.current !== overdue.id) {
       overdueAlertShownForRef.current = overdue.id;
-      Alert.alert(
-        'Checkpoint Overdue',
-        `You're behind schedule for checkpoint ${overdue.id} of ${NUM_CHECKPOINTS}. Emergency contacts are being notified.`,
-      );
-      triggerSOS('checkpoint_overdue');
+
+      if (isManualMode) {
+        Alert.alert(
+          'Checkpoint Overdue',
+          `You're behind schedule for checkpoint ${overdue.id} of ${NUM_CHECKPOINTS}. Are you okay?`,
+          [
+            {text: "I'm fine, continue", style: 'cancel'},
+            {
+              text: 'I need help',
+              style: 'destructive',
+              onPress: () => triggerSOS('checkpoint_overdue'),
+            },
+          ],
+          {cancelable: false},
+        );
+      } else {
+        Alert.alert(
+          'Checkpoint Overdue',
+          `You're behind schedule for checkpoint ${overdue.id} of ${NUM_CHECKPOINTS}. Emergency contacts are being notified.`,
+        );
+        triggerSOS('checkpoint_overdue');
+      }
     }
   }, [location, checkpoints]);
 
@@ -610,6 +692,9 @@ export default function JourneyTrackingScreen({route}: any) {
     <SafeAreaView style={styles.container}>
       <ScrollView scrollEnabled={scrollEnabled}>
         <Text style={styles.heading}>🚗 Journey in Progress</Text>
+        <Text style={styles.modeIndicator}>
+          {isManualMode ? '🧍 Manual Mode' : '🤖 Automatic Mode'}
+        </Text>
 
         <View
           style={styles.mapContainer}
@@ -791,7 +876,13 @@ const styles = StyleSheet.create({
   heading: {
     fontSize: 28,
     fontWeight: '700',
-    marginBottom: 20,
+    marginBottom: 4,
+  },
+
+  modeIndicator: {
+    color: '#6B7280',
+    fontWeight: '600',
+    marginBottom: 16,
   },
 
   mapContainer: {

@@ -3,6 +3,7 @@ import {View, StyleSheet, TouchableOpacity, Alert} from 'react-native';
 import {Text, TextInput} from 'react-native-paper';
 import PrimaryButton from '../../components/buttons/PrimaryButton';
 import {useAuth} from '../../context/AuthContext';
+import {requestAllPermissions} from '../../utils/permissions';
 
 export default function LoginScreen({navigation}: any) {
   const {login} = useAuth();
@@ -21,6 +22,7 @@ export default function LoginScreen({navigation}: any) {
     setSubmitting(true);
     try {
       await login(email, password);
+      await requestAllPermissions();
       navigation.replace('Main');
     } catch (err: any) {
       Alert.alert('Login failed', err.message ?? 'Unknown error');

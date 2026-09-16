@@ -36,3 +36,16 @@ CREATE TABLE IF NOT EXISTS journeys (
 );
 
 CREATE INDEX IF NOT EXISTS idx_journeys_user_id ON journeys(user_id);
+
+
+CREATE TABLE IF NOT EXISTS journey_locations (
+  id SERIAL PRIMARY KEY,
+  journey_id INTEGER NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+  latitude DOUBLE PRECISION NOT NULL,
+  longitude DOUBLE PRECISION NOT NULL,
+  speed_kph DOUBLE PRECISION,
+  distance_from_route_m DOUBLE PRECISION,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_journey_locations_journey_id ON journey_locations(journey_id);

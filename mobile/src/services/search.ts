@@ -2,7 +2,9 @@ import axios from 'axios';
 
 // Same LAN-IP caveat as services/route.ts - set this to your dev machine's
 // LAN IP, not localhost, so a phone/emulator can actually reach it.
-const BACKEND_URL = 'http://localhost:4000'; // <-- change this
+import Config from 'react-native-config';
+
+const BACKEND_URL = Config.BACKEND_URL; // <-- change this
 
 export async function searchPlace(
   query: string,

@@ -2,7 +2,9 @@
 // auth-token pattern as ContactsContext - keep BACKEND_URL in sync across
 // all service files (route.ts, search.ts, auth.ts, journeys.ts).
 
-const BACKEND_URL = 'http://localhost:4000';
+import Config from 'react-native-config';
+
+const BACKEND_URL = Config.BACKEND_URL;
 
 export type Coord = {latitude: number; longitude: number};
 
@@ -63,6 +65,29 @@ export async function endJourney(
     body: JSON.stringify({status, deviationCount}),
   });
   return handleResponse(res);
+}
+
+export async function logLocation(
+  token: string,
+  journeyId: string,
+  params: {
+    latitude: number;
+    longitude: number;
+    speedKph?: number;
+    distanceFromRouteM?: number;
+  },
+): Promise<void> {
+  await fetch(`${BACKEND_URL}/api/journeys/${journeyId}/locations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(params),
+  });
+  // Deliberately not awaiting/throwing on failure at the call site - a
+  // missed ping shouldn't interrupt the journey or spam alerts. Fire and
+  // forget, same reasoning as analytics logging.
 }
 
 export async function listJourneys(

@@ -8,7 +8,9 @@ import React, {
 import {useAuth} from './AuthContext';
 
 // Same LAN-IP caveat as the other services - keep in sync with route.ts/search.ts/auth.ts.
-const BACKEND_URL = 'http://localhost:4000';
+import Config from 'react-native-config';
+
+const BACKEND_URL = Config.BACKEND_URL;
 
 export type EmergencyContact = {
   id: string;

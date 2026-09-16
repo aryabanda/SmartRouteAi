@@ -28,6 +28,8 @@ const [selectedPlace, setSelectedPlace] = useState<any>(null);
 
   const [destination, setDestination] = useState('');
 
+  const [navigationMode, setNavigationMode] = useState<'automatic' | 'manual'>('automatic');
+
 
 
   const navigation = useNavigation<any>();
@@ -164,6 +166,49 @@ useEffect(() => {
         </View>
       </View>
 
+      <View style={styles.modeCard}>
+        <Text style={styles.sectionTitle}>Navigation Mode</Text>
+        <View style={styles.modeRow}>
+          <TouchableOpacity
+            style={[
+              styles.modeButton,
+              navigationMode === 'automatic' && styles.modeButtonActive,
+            ]}
+            onPress={() => setNavigationMode('automatic')}
+          >
+            <Text
+              style={[
+                styles.modeButtonText,
+                navigationMode === 'automatic' && styles.modeButtonTextActive,
+              ]}
+            >
+              🤖 Automatic
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.modeButton,
+              navigationMode === 'manual' && styles.modeButtonActive,
+            ]}
+            onPress={() => setNavigationMode('manual')}
+          >
+            <Text
+              style={[
+                styles.modeButtonText,
+                navigationMode === 'manual' && styles.modeButtonTextActive,
+              ]}
+            >
+              🧍 Manual
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.modeDescription}>
+          {navigationMode === 'automatic'
+            ? 'The app automatically recalculates routes on likely detours and sends SOS if a deviation or checkpoint looks concerning.'
+            : "You'll be asked to confirm before anything is sent - nothing happens automatically without your input."}
+        </Text>
+      </View>
+
       <TouchableOpacity
     style={styles.button}
     disabled={!routeInfo}
@@ -172,6 +217,7 @@ useEffect(() => {
             destination,
             routeInfo,
             selectedPlace,
+            navigationMode,
         });
     }}
 >
@@ -335,6 +381,50 @@ addressText: {
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
+  },
+
+  modeCard: {
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    padding: 22,
+    marginBottom: 20,
+  },
+
+  modeRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+
+  modeButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+
+  modeButtonActive: {
+    backgroundColor: '#EEF4FF',
+    borderColor: '#2563EB',
+  },
+
+  modeButtonText: {
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+
+  modeButtonTextActive: {
+    color: '#2563EB',
+  },
+
+  modeDescription: {
+    fontSize: 13,
+    color: '#6B7280',
+    lineHeight: 19,
   },
 
   button: {

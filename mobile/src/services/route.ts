@@ -5,7 +5,9 @@
 // For a physical Android device on the same Wi-Fi as your dev machine,
 // run `ipconfig` (Windows) / `ifconfig` (Mac/Linux) to find that IP.
 
-const BACKEND_URL = 'http://localhost:4000'; // <-- change this
+import Config from 'react-native-config';
+
+const BACKEND_URL = Config.BACKEND_URL; // <-- change this
 
 export type Coord = {latitude: number; longitude: number};
 

@@ -1,7 +1,9 @@
 // Talks to the backend's /api/auth endpoints. Same BACKEND_URL pattern as
 // route.ts/search.ts - keep all three in sync if you consolidate later.
 
-const BACKEND_URL = 'http://localhost:4000'; // <-- match route.ts / search.ts
+import Config from 'react-native-config';
+
+const BACKEND_URL = Config.BACKEND_URL; // <-- match route.ts / search.ts
 
 export type PublicUser = {
   id: string;

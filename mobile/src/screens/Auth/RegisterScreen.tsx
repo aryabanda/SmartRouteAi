@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import {useNavigation} from '@react-navigation/native';
 import {useAuth} from '../../context/AuthContext';
+import {requestAllPermissions} from '../../utils/permissions';
 
 export default function RegisterScreen() {
   const navigation = useNavigation<any>();
@@ -39,6 +40,7 @@ export default function RegisterScreen() {
     setSubmitting(true);
     try {
       await register(name, email, password);
+      await requestAllPermissions();
       // On success, AuthContext already has the session - go straight in
       // rather than making them log in again right after registering.
       navigation.reset({index: 0, routes: [{name: 'Main'}]});
