@@ -45,6 +45,17 @@ const NUM_CHECKPOINTS = 5;
 const CHECKPOINT_RADIUS_METERS = 100;
 const CHECKPOINT_GRACE_MINUTES = 3;
 
+// If no real GPS update has arrived in this long, treat location as stale -
+// e.g. lost signal, backgrounded without background permission, or (as
+// seen in testing) a paused mock-location provider. Surfaced in the UI so
+// a frozen speed/position reading isn't mistaken for a live one.
+const SIGNAL_STALE_MS = 30000;
+// How often the safety checks (deviation timer, checkpoint timer) re-run
+// even without a fresh GPS update - this is what keeps SOS/deviation logic
+// progressing on wall-clock time instead of stalling entirely when updates
+// stop arriving.
+const HEARTBEAT_INTERVAL_MS = 5000;
+
 type Coord = {latitude: number; longitude: number};
 
 type Checkpoint = {
@@ -235,6 +246,13 @@ export default function JourneyTrackingScreen({route}: any) {
   const sosTriggeredRef = useRef(false);
   const journeyLogStartedRef = useRef(false);
   const lastPingLoggedAtRef = useRef(0);
+
+  // Tracks the last REAL GPS fix received, independent of whether it's
+  // stale - the heartbeat below uses this to keep evaluating deviation/
+  // checkpoint timers even when no new update is arriving at all.
+  const lastKnownLocationRef = useRef<any>(null);
+  const lastLocationUpdateAtRef = useRef<number>(Date.now());
+  const [isSignalStale, setIsSignalStale] = useState(false);
 
   // Adaptive instead of fixed: a stationary phone generates no new trail
   // information between pings, so logging it every 15s is wasted battery
@@ -450,22 +468,27 @@ export default function JourneyTrackingScreen({route}: any) {
   // {distanceFromRoute, speed, headingChange, timeOffRoute}) would take over
   // to decide "intentional reroute" vs "suspicious deviation" instead of
   // treating every confirmed deviation the same way.
-  useEffect(() => {
-    if (!location || !routeInfo?.coordinates?.length) return;
+  //
+  // Defined as a plain function (not directly inside a useEffect) so it can
+  // be called both when a real location update arrives AND on a heartbeat
+  // timer using the last known location - this is what lets deviation/SOS
+  // timers keep progressing even if GPS updates stop arriving entirely.
+  function runDeviationCheck(currentLocation: any) {
+    if (!currentLocation || !routeInfo?.coordinates?.length) return;
 
     const currentCoord: Coord = {
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
+      latitude: currentLocation.coords.latitude,
+      longitude: currentLocation.coords.longitude,
     };
 
     const dist = distanceToRouteMeters(currentCoord, routeInfo.coordinates);
     setDistanceFromRoute(dist);
 
-    // Piggybacks on this effect since it already runs on every location
-    // update and already has dist computed - throttled so a whole journey
-    // doesn't hammer the backend with a request per GPS tick.
+    // Piggybacks on this check since it already runs regularly and already
+    // has dist computed - throttled so a whole journey doesn't hammer the
+    // backend with a request per tick.
     const now = Date.now();
-    const currentSpeedKph = (location.coords.speed ?? 0) * 3.6;
+    const currentSpeedKph = (currentLocation.coords.speed ?? 0) * 3.6;
     if (
       token &&
       journeyIdRef.current &&
@@ -475,7 +498,7 @@ export default function JourneyTrackingScreen({route}: any) {
       logLocation(token, journeyIdRef.current, {
         latitude: currentCoord.latitude,
         longitude: currentCoord.longitude,
-        speedKph: (location.coords.speed ?? 0) * 3.6,
+        speedKph: currentSpeedKph,
         distanceFromRouteM: dist,
       }).catch(() => {}); // fire-and-forget, see logLocation's own comment
     }
@@ -548,11 +571,11 @@ export default function JourneyTrackingScreen({route}: any) {
         return;
       }
 
-      const speedKph = (location.coords.speed ?? 0) * 3.6;
+      const speedKph = (currentLocation.coords.speed ?? 0) * 3.6;
       // Prefer the device's own compass/course heading when GPS provides
       // one; fall back to a bearing computed from the last two fixes.
       const currentHeading =
-        location.coords.heading ??
+        currentLocation.coords.heading ??
         (priorPoint ? calculateBearing(priorPoint, currentCoord) : 0);
       const headingChangeDeg =
         headingAtDeviationStartRef.current != null
@@ -620,11 +643,31 @@ export default function JourneyTrackingScreen({route}: any) {
           classifyingRef.current = false;
         });
     }
+  }
+
+  // Always points at the freshest runDeviationCheck closure (fresh routeInfo,
+  // selectedPlace, isManualMode, triggerSOS) - the heartbeat below calls
+  // through this ref rather than the function directly, so it never acts on
+  // stale captured values from whenever the interval was first set up.
+  const runDeviationCheckRef = useRef(runDeviationCheck);
+  useEffect(() => {
+    runDeviationCheckRef.current = runDeviationCheck;
+  });
+
+  useEffect(() => {
+    if (!location) return;
+    lastKnownLocationRef.current = location;
+    lastLocationUpdateAtRef.current = Date.now();
+    setIsSignalStale(false);
+    runDeviationCheckRef.current(location);
   }, [location, routeInfo]);
 
   // ---- Checkpoint arrival + overdue detection ----
-  useEffect(() => {
-    if (!location || checkpoints.length === 0) return;
+  // Same function+ref pattern as runDeviationCheck above, for the same
+  // reason: needs to be callable from the heartbeat using a possibly-stale
+  // last-known location, not just from a fresh GPS update.
+  function runCheckpointCheck(currentLocation: any) {
+    if (!currentLocation || checkpoints.length === 0) return;
 
     const elapsedMinutes = (Date.now() - journeyStartRef.current) / 60000;
 
@@ -633,8 +676,8 @@ export default function JourneyTrackingScreen({route}: any) {
       const updated = prev.map(cp => {
         if (cp.reached) return cp;
         const distKm = calculateDistance(
-          location.coords.latitude,
-          location.coords.longitude,
+          currentLocation.coords.latitude,
+          currentLocation.coords.longitude,
           cp.latitude,
           cp.longitude,
         );
@@ -678,7 +721,40 @@ export default function JourneyTrackingScreen({route}: any) {
         triggerSOS('checkpoint_overdue');
       }
     }
+  }
+
+  const runCheckpointCheckRef = useRef(runCheckpointCheck);
+  useEffect(() => {
+    runCheckpointCheckRef.current = runCheckpointCheck;
+  });
+
+  useEffect(() => {
+    if (!location) return;
+    runCheckpointCheckRef.current(location);
   }, [location, checkpoints]);
+
+  // ---- Heartbeat ----
+  // Runs both safety checks on a plain timer, independent of whether a new
+  // GPS update ever arrives. This is the actual fix for "no SOS after a
+  // long wait with GPS paused" - without this, everything above only
+  // re-evaluates when `location` changes, so a lost/paused GPS signal
+  // silently freezes the entire deviation/checkpoint/SOS pipeline forever,
+  // no matter how long you wait, since wall-clock time was never actually
+  // being checked on its own.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const stale = now - lastLocationUpdateAtRef.current > SIGNAL_STALE_MS;
+      setIsSignalStale(stale);
+
+      if (lastKnownLocationRef.current) {
+        runDeviationCheckRef.current(lastKnownLocationRef.current);
+        runCheckpointCheckRef.current(lastKnownLocationRef.current);
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -789,9 +865,9 @@ export default function JourneyTrackingScreen({route}: any) {
 
           <View style={styles.row}>
             <Text>Speed</Text>
-            <Text>
+            <Text style={isSignalStale ? styles.staleValue : undefined}>
               {location?.coords?.speed != null
-                ? `${(location.coords.speed * 3.6).toFixed(1)} km/h`
+                ? `${(location.coords.speed * 3.6).toFixed(1)} km/h${isSignalStale ? ' (stale)' : ''}`
                 : '0 km/h'}
             </Text>
           </View>
@@ -828,6 +904,12 @@ export default function JourneyTrackingScreen({route}: any) {
           </Text>
 
           <Text>✓ Traffic Normal</Text>
+
+          <Text style={isSignalStale ? styles.staleValue : undefined}>
+            {isSignalStale
+              ? '⚠ GPS Signal Stale - safety checks running on last known position'
+              : '✓ GPS Signal Live'}
+          </Text>
         </View>
 
         <TouchableOpacity
@@ -943,6 +1025,11 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     marginBottom: 10,
+  },
+
+  staleValue: {
+    color: '#F59E0B',
+    fontWeight: '700',
   },
 
   sos: {
