@@ -13,15 +13,9 @@ import {useAppLocation} from '../../context/LocationContext';
 import {useContacts} from '../../context/ContactsContext';
 import {useAuth} from '../../context/AuthContext';
 import {sendSOS} from '../../services/sos';
-import {
-  createJourney,
-  endJourney,
-  logLocation,
-  buildTrackingUrl,
-} from '../../services/journeys';
+import {createJourney, endJourney, logLocation} from '../../services/journeys';
 import {useNavigation} from '@react-navigation/native';
 import {recalculateRoute, classifyDeviation} from '../../services/route';
-import Config from 'react-native-config';
 import {CameraRef} from '@maplibre/maplibre-react-native';
 import {
   Map,
@@ -36,7 +30,6 @@ import {
 // Free vector tile style, no API key required. Swap for MapTiler/Stadia
 // later if you need geocoding/routing bundled in or higher volume.
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-const BACKEND_URL = Config.BACKEND_URL;
 
 // ---- Rule-based deviation detection tuning ----
 // How far (meters) off the planned route counts as "off route" at all.
@@ -51,26 +44,7 @@ const SOS_AUTO_TRIGGER_MS = 60000;
 // ---- Checkpoint tuning ----
 const NUM_CHECKPOINTS = 5;
 const CHECKPOINT_RADIUS_METERS = 100;
-
-// A FLAT grace period (e.g. "always 3 minutes late") doesn't reflect real
-// traffic - a 45-minute drive can easily lose 10-15 minutes to traffic with
-// nothing wrong at all, while a 10-minute walk being 5 minutes late is a
-// much bigger relative deal. So grace scales with how far into the journey
-// this checkpoint sits: at least a fixed floor (short routes still need
-// SOME buffer), or a percentage of the elapsed-so-far expected time,
-// whichever is larger. This doesn't use live traffic data (that would need
-// a routing API that re-estimates ETA in real time, which isn't part of
-// this project's scope) - it's a reasonable proxy that meaningfully cuts
-// false positives without needing that.
-const CHECKPOINT_GRACE_FLOOR_MINUTES = 5;
-const CHECKPOINT_GRACE_PERCENTAGE = 0.4; // 40% of the checkpoint's expected elapsed time
-
-function checkpointGraceMinutes(checkpointExpectedMinutes: number): number {
-  return Math.max(
-    CHECKPOINT_GRACE_FLOOR_MINUTES,
-    checkpointExpectedMinutes * CHECKPOINT_GRACE_PERCENTAGE,
-  );
-}
+const CHECKPOINT_GRACE_MINUTES = 3;
 
 // If no real GPS update has arrived in this long, treat location as stale -
 // e.g. lost signal, backgrounded without background permission, or (as
@@ -84,17 +58,6 @@ const SIGNAL_STALE_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 5000;
 
 type Coord = {latitude: number; longitude: number};
-
-type TrafficLevel = 'normal' | 'moderate' | 'heavy';
-
-type TrafficRouteSegment = {
-  startIndex: number;
-  endIndex: number;
-  status: TrafficLevel;
-  currentSpeedKph?: number;
-  freeFlowSpeedKph?: number;
-  relativeSpeed?: number;
-};
 
 type Checkpoint = {
   id: number;
@@ -249,9 +212,6 @@ export default function JourneyTrackingScreen({route}: any) {
     initialRouteInfo?.distance ?? 0,
   );
   const [eta, setEta] = useState(initialRouteInfo?.duration ?? 0);
-  const [trafficRouteSegments, setTrafficRouteSegments] = useState<TrafficRouteSegment[]>([]);
-  const [trafficLoading, setTrafficLoading] = useState(false);
-  const [trafficError, setTrafficError] = useState<string | null>(null);
 
   // Lets us pause the page's ScrollView while a finger is down on the map,
   // so panning/zooming the map doesn't fight the page scroll gesture.
@@ -283,7 +243,6 @@ export default function JourneyTrackingScreen({route}: any) {
 
   // ---- Journey history logging ----
   const journeyIdRef = useRef<string | null>(null);
-  const journeyShareTokenRef = useRef<string | null>(null);
   const deviationCountRef = useRef(0);
   const sosTriggeredRef = useRef(false);
   const journeyLogStartedRef = useRef(false);
@@ -333,7 +292,6 @@ export default function JourneyTrackingScreen({route}: any) {
     })
       .then(({journey}) => {
         journeyIdRef.current = journey.id;
-        journeyShareTokenRef.current = journey.share_token ?? null;
       })
       .catch(err => {
         console.warn('Failed to log journey start:', err.message);
@@ -353,22 +311,6 @@ export default function JourneyTrackingScreen({route}: any) {
   // condition stays true across multiple checks - one SOS per triggered
   // reason per journey, until it's manually reset (e.g. new journey starts).
   const sosSentForRef = useRef<Set<string>>(new Set());
-
-  /* Wait briefly for journey creation so an immediate SOS can still use the live tracking URL. */
-  const waitForJourneyShareToken = async (
-    timeoutMs = 5000,
-  ): Promise<string | null> => {
-    const start = Date.now();
-
-    while (
-      !journeyShareTokenRef.current &&
-      Date.now() - start < timeoutMs
-    ) {
-      await new Promise<void>(resolve => setTimeout(resolve, 200));
-    }
-
-    return journeyShareTokenRef.current;
-  };
 
   const triggerSOS = async (
     reason: 'manual' | 'route_deviation' | 'checkpoint_overdue',
@@ -392,12 +334,6 @@ export default function JourneyTrackingScreen({route}: any) {
     }
 
     try {
-      const shareToken = await waitForJourneyShareToken();
-
-      const trackingUrl = shareToken
-        ? buildTrackingUrl(shareToken)
-        : undefined;
-
       const results = await sendSOS(
         contacts,
         {
@@ -406,7 +342,6 @@ export default function JourneyTrackingScreen({route}: any) {
         },
         reason,
         destination,
-        trackingUrl,
       );
       sosTriggeredRef.current = true;
       finishJourneyLog('sos_triggered');
@@ -438,139 +373,16 @@ export default function JourneyTrackingScreen({route}: any) {
     });
   };
 
-  // Build a traffic-colored GeoJSON route from TomTom's sampled flow data.
-  // Gaps are deliberately kept blue/normal so the complete route remains visible
-  // even when TomTom does not return flow data for every sampled point.
-  const trafficRouteGeoJSON = useMemo(() => {
-    const coords = routeInfo?.coordinates ?? [];
-
-    if (coords.length < 2) {
-      return {type: 'FeatureCollection', features: []};
-    }
-
-    const normalFeature = {
-      type: 'Feature' as const,
-      properties: {traffic: 'normal' as TrafficLevel},
-      geometry: {
-        type: 'LineString' as const,
-        coordinates: coords.map((p: any) => [p.longitude, p.latitude]),
-      },
-    };
-
-    if (trafficRouteSegments.length === 0) {
-      return {type: 'FeatureCollection' as const, features: [normalFeature]};
-    }
-
-    const features: any[] = [];
-    const sorted = [...trafficRouteSegments]
-      .filter(s => Number.isFinite(s.startIndex) && Number.isFinite(s.endIndex))
-      .sort((a, b) => a.startIndex - b.startIndex);
-
-    let cursor = 0;
-
-    for (const segment of sorted) {
-      const start = Math.max(0, Math.min(segment.startIndex, coords.length - 2));
-      const end = Math.max(start + 1, Math.min(segment.endIndex, coords.length - 1));
-
-      if (start > cursor) {
-        features.push({
-          type: 'Feature',
-          properties: {traffic: 'normal'},
-          geometry: {
-            type: 'LineString',
-            coordinates: coords.slice(cursor, start + 1).map((p: any) => [p.longitude, p.latitude]),
-          },
-        });
-      }
-
-      features.push({
-        type: 'Feature',
-        properties: {traffic: segment.status},
-        geometry: {
-          type: 'LineString',
-          coordinates: coords.slice(start, end + 1).map((p: any) => [p.longitude, p.latitude]),
-        },
-      });
-
-      cursor = Math.max(cursor, end);
-    }
-
-    if (cursor < coords.length - 1) {
-      features.push({
-        type: 'Feature',
-        properties: {traffic: 'normal'},
-        geometry: {
-          type: 'LineString',
-          coordinates: coords.slice(cursor).map((p: any) => [p.longitude, p.latitude]),
-        },
-      });
-    }
-
-    return {
-      type: 'FeatureCollection' as const,
-      features: features.length ? features : [normalFeature],
-    };
-  }, [routeInfo?.coordinates, trafficRouteSegments]);
-
-  // Fetch fresh TomTom traffic for the current route. This refreshes every
-  // minute without changing the planned route, so traffic cannot accidentally
-  // reset checkpoints or deviation state.
-  useEffect(() => {
-    const coordinates = routeInfo?.coordinates;
-    if (!BACKEND_URL || !coordinates || coordinates.length < 2) {
-      setTrafficRouteSegments([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    const refreshTraffic = async () => {
-      if (cancelled) return;
-      setTrafficLoading(true);
-      setTrafficError(null);
-
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/traffic/route`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({coordinates}),
-        });
-
-        const body = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          throw new Error(body?.error ?? `Traffic request failed (${response.status})`);
-        }
-
-        if (!cancelled) {
-          const segments = Array.isArray(body?.segments) ? body.segments : [];
-          console.log(
-  'TRAFFIC SEGMENTS:',
-  JSON.stringify(segments, null, 2),
-);
-          setTrafficRouteSegments(segments);
-          console.log('TomTom traffic updated:', segments.length, 'segments');
-        }
-      } catch (error: any) {
-        if (!cancelled) {
-          console.warn('TomTom traffic update failed:', error?.message ?? error);
-          setTrafficError(error?.message ?? 'Traffic unavailable');
-          // Keep the route visible in blue when traffic is temporarily unavailable.
-          setTrafficRouteSegments([]);
-        }
-      } finally {
-        if (!cancelled) setTrafficLoading(false);
-      }
-    };
-
-    refreshTraffic();
-    const interval = setInterval(refreshTraffic, 60 * 1000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [routeInfo?.coordinates]);
+  const routeGeoJSON: GeoJSON.Feature = {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'LineString',
+      coordinates:
+        routeInfo?.coordinates?.map((p: any) => [p.longitude, p.latitude]) ??
+        [],
+    },
+  };
 
   // One-time camera centering the first time we get a GPS fix.
   useEffect(() => {
@@ -598,19 +410,50 @@ export default function JourneyTrackingScreen({route}: any) {
   }, [location, selectedPlace]);
 
   useEffect(() => {
-    if (!location) return;
+  if (!routeInfo) return;
 
-    const speed = location.coords.speed ?? 0;
+  setEta(routeInfo.duration);
+}, [routeInfo]);
+useEffect(() => {
+  if (!location || !selectedPlace) return;
 
-    if (speed < 1) {
-      return;
+  const refresh = async () => {
+    try {
+      const origin = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      };
+
+      const destinationTarget = {
+        latitude: selectedPlace.center[1],
+        longitude: selectedPlace.center[0],
+      };
+
+      const updatedRoute = await getRoute(
+        origin,
+        destinationTarget,
+      );
+
+      setRouteInfo(updatedRoute);
+      setDistanceLeft(updatedRoute.distance);
+      setEta(updatedRoute.duration);
+    } catch (error) {
+      console.warn(
+        'Traffic route refresh failed:',
+        error,
+      );
     }
+  };
 
-    const speedKmPerMin = (speed * 3.6) / 60;
+  refresh();
 
-    setEta(distanceLeft / speedKmPerMin);
-  }, [distanceLeft, location]);
+  const interval = setInterval(
+    refresh,
+    60 * 1000,
+  );
 
+  return () => clearInterval(interval);
+}, [selectedPlace]);
   useEffect(() => {
     if (!location) return;
 
@@ -882,7 +725,7 @@ export default function JourneyTrackingScreen({route}: any) {
     const overdue = checkpoints.find(
       cp =>
         !cp.reached &&
-        elapsedMinutes > cp.expectedMinutes + checkpointGraceMinutes(cp.expectedMinutes),
+        elapsedMinutes > cp.expectedMinutes + CHECKPOINT_GRACE_MINUTES,
     );
 
     if (overdue && overdueAlertShownForRef.current !== overdue.id) {
@@ -967,24 +810,26 @@ export default function JourneyTrackingScreen({route}: any) {
           onTouchEnd={() => setScrollEnabled(true)}
           onTouchCancel={() => setScrollEnabled(true)}
         >
+
+        <RasterSource
+  id="tomtom-traffic"
+  tiles={[
+    `${BACKEND_URL}/api/traffic/tiles/{z}/{x}/{y}.png`,
+  ]}
+  tileSize={256}
+  minzoom={0}
+  maxzoom={22}
+>
+  <Layer
+    id="tomtom-traffic-layer"
+    type="raster"
+    style={{
+      rasterOpacity: 0.75,
+    }}
+  />
+</RasterSource>
           <Map style={styles.map} mapStyle={MAP_STYLE_URL}>
             <Camera ref={cameraRef} />
-
-            {BACKEND_URL ? (
-              <RasterSource
-                id="tomtom-traffic"
-                tiles={[`${BACKEND_URL}/api/traffic/tiles/{z}/{x}/{y}.png`]}
-                tileSize={256}
-                minzoom={0}
-                maxzoom={22}
-              >
-                <Layer
-                  id="tomtom-traffic-layer"
-                  type="raster"
-                  style={{rasterOpacity: 0.78}}
-                />
-              </RasterSource>
-            ) : null}
 
             <UserLocation />
 
@@ -1025,42 +870,14 @@ export default function JourneyTrackingScreen({route}: any) {
               </Marker>
             ))}
 
-            {routeInfo?.coordinates?.length > 1 && (
-              <GeoJSONSource
-                id="traffic-colored-route"
-                data={trafficRouteGeoJSON as any}
-              >
+            {routeInfo?.coordinates && (
+              <GeoJSONSource id="route" data={routeGeoJSON}>
                 <Layer
-                  id="route-normal"
+                  id="route-line"
                   type="line"
-                  filter={['==', ['get', 'traffic'], 'normal']}
                   style={{
                     lineColor: '#2563EB',
-                    lineWidth: 7,
-                    lineCap: 'round',
-                    lineJoin: 'round',
-                  }}
-                />
-                <Layer
-                  id="route-moderate"
-                  type="line"
-                  filter={['==', ['get', 'traffic'], 'moderate']}
-                  style={{
-                    lineColor: '#F59E0B',
-                    lineWidth: 7,
-                    lineCap: 'round',
-                    lineJoin: 'round',
-                  }}
-                />
-                <Layer
-                  id="route-heavy"
-                  type="line"
-                  filter={['==', ['get', 'traffic'], 'heavy']}
-                  style={{
-                    lineColor: '#EF4444',
-                    lineWidth: 7,
-                    lineCap: 'round',
-                    lineJoin: 'round',
+                    lineWidth: 6,
                   }}
                 />
               </GeoJSONSource>
@@ -1136,25 +953,28 @@ export default function JourneyTrackingScreen({route}: any) {
               : '✓ No Deviation'}
           </Text>
 
-          <Text>
-            {trafficError
-              ? '⚠ Traffic data unavailable'
-              : trafficLoading && trafficRouteSegments.length === 0
-              ? '… Loading live traffic'
-              : trafficRouteSegments.some(s => s.status === 'heavy')
-              ? '🔴 Heavy Traffic'
-              : trafficRouteSegments.some(s => s.status === 'moderate')
-              ? '⚠ Moderate Traffic'
-              : '✓ Traffic Normal'}
-          </Text>
+          const trafficDelay = routeInfo?.trafficDelay ?? 0;
 
-          <Text style={{marginTop: 6}}>
-            🔵 Normal   🟡 Moderate   🔴 Heavy
-          </Text>
+const trafficStatus =
+  trafficDelay < 2
+    ? 'normal'
+    : trafficDelay < 5
+    ? 'moderate'
+    : 'heavy';
 
-          {trafficError ? (
-            <Text style={{marginTop: 6}}>{trafficError}</Text>
-          ) : null}
+    <Text>
+  {trafficStatus === 'normal'
+    ? '✓ Traffic Normal'
+    : trafficStatus === 'moderate'
+    ? '⚠ Moderate Traffic'
+    : '🔴 Heavy Traffic'}
+</Text>
+
+{trafficDelay > 0 && (
+  <Text>
+    +{trafficDelay.toFixed(0)} min traffic delay
+  </Text>
+)}
 
           <Text style={isSignalStale ? styles.staleValue : undefined}>
             {isSignalStale
@@ -1186,8 +1006,9 @@ export default function JourneyTrackingScreen({route}: any) {
         <TouchableOpacity
           style={styles.endButton}
           onPress={() => {
-            // Explicitly ending the journey stops live tracking.
-            finishJourneyLog('completed');
+            if (!sosTriggeredRef.current) {
+              finishJourneyLog('completed');
+            }
             navigation.goBack();
           }}
         >

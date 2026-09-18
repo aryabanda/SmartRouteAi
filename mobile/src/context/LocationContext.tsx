@@ -3,14 +3,16 @@ import React, {
   useContext,
   useEffect,
   useState,
+  useRef,
 } from 'react';
 
-import {getCurrentLocation} from '../services/location';
-import {reverseGeocode} from '../services/geocoding';
 import {
+  getCurrentLocation,
   watchLocation,
   stopWatchingLocation,
 } from '../services/location';
+
+import {reverseGeocode} from '../services/geocoding';
 
 const LocationContext = createContext<any>(null);
 
@@ -21,48 +23,106 @@ export function LocationProvider({
 }) {
   const [location, setLocation] = useState<any>(null);
 
+  // Prevent reverse-geocoding on every GPS update.
+  const lastGeocodeTimeRef = useRef(0);
+
+  // Keep the latest address available when a new GPS fix arrives.
+  const lastAddressRef = useRef<string | undefined>(undefined);
+
   useEffect(() => {
     let watchId: number | undefined;
     let cancelled = false;
 
-    async function attachAddress(current: any) {
-      let address: string | undefined;
+    async function handleLocation(current: any) {
+      if (cancelled) return;
+
+      // --------------------------------------------------
+      // 1. UPDATE GPS IMMEDIATELY
+      // --------------------------------------------------
+      //
+      // This is the important part.
+      //
+      // Speed, coordinates, heading, timestamp, etc.
+      // should NOT wait for reverse geocoding.
+      //
+      setLocation({
+        ...current,
+        address: lastAddressRef.current,
+      });
+
+      // --------------------------------------------------
+      // 2. THROTTLE REVERSE GEOCODING
+      // --------------------------------------------------
+
+      const now = Date.now();
+
+      // Only reverse-geocode once every 15 seconds.
+      if (now - lastGeocodeTimeRef.current < 15000) {
+        return;
+      }
+
+      lastGeocodeTimeRef.current = now;
+
       try {
-        address = await reverseGeocode(
+        const address = await reverseGeocode(
           current.coords.latitude,
           current.coords.longitude,
         );
-      } catch (err) {
-        console.warn('Reverse geocode failed, using coords without an address:', err);
-      }
 
-      if (!cancelled) {
-        setLocation({...current, address});
+        if (cancelled) return;
+
+        lastAddressRef.current = address;
+
+        // Update ONLY the address.
+        // GPS data remains from the latest fix.
+        setLocation((prev:any) => ({
+          ...(prev ?? current),
+          address,
+        }));
+      } catch (err) {
+        console.warn(
+          'Reverse geocode failed, keeping latest GPS:',
+          err,
+        );
       }
     }
 
-    // One-time fix on mount as a fallback - if the continuous watcher below
-    // is slow to fire its first update (or fails entirely), this still
-    // gets *something* onto the screen rather than an indefinite null.
+    // --------------------------------------------------
+    // INITIAL LOCATION
+    // --------------------------------------------------
+
     (async () => {
       try {
         const current = await getCurrentLocation();
-        await attachAddress(current);
+
+        if (!cancelled) {
+          await handleLocation(current);
+        }
       } catch (err) {
-        console.error('getCurrentLocation failed:', err);
+        console.error(
+          'getCurrentLocation failed:',
+          err,
+        );
       }
     })();
 
+    // --------------------------------------------------
+    // CONTINUOUS GPS WATCHER
+    // --------------------------------------------------
+
     async function startWatching() {
       try {
-        watchId = await watchLocation(async current => {
-          await attachAddress(current);
+        watchId = await watchLocation(current => {
+          // Do NOT await reverse geocoding here.
+          //
+          // GPS update is processed immediately.
+          void handleLocation(current);
         });
       } catch (err) {
-        // This was previously silent - a rejected/thrown watchLocation call
-        // would leave `location` stuck at null forever with no visible
-        // error anywhere, which is exactly the bug being chased here.
-        console.error('watchLocation failed to start:', err);
+        console.error(
+          'watchLocation failed to start:',
+          err,
+        );
       }
     }
 
@@ -70,6 +130,7 @@ export function LocationProvider({
 
     return () => {
       cancelled = true;
+
       if (watchId !== undefined) {
         stopWatchingLocation(watchId);
       }

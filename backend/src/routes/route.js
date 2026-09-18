@@ -1,5 +1,5 @@
 import {Router} from 'express';
-import {fetchRoute} from '../services/directions.js';
+import {fetchTomTomRoute} from '../services/tomtomRouting.js';
 
 export const routeRouter = Router();
 
@@ -13,7 +13,7 @@ routeRouter.post('/', async (req, res) => {
   }
 
   try {
-    const routeInfo = await fetchRoute(origin, destination);
+    const routeInfo = await fetchTomTomRoute(origin, destination);
     res.json(routeInfo);
   } catch (err) {
     console.error('Route fetch failed:', err.message);
@@ -33,7 +33,7 @@ routeRouter.post('/recalculate', async (req, res) => {
   }
 
   try {
-    const routeInfo = await fetchRoute(origin, destination);
+    const routeInfo = await fetchTomTomRoute(origin, destination);
     res.json(routeInfo);
   } catch (err) {
     console.error('Route recalculation failed:', err.message);

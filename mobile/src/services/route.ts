@@ -4,17 +4,27 @@
 // or emulator to your dev machine) - e.g. http://192.168.1.5:4000
 // For a physical Android device on the same Wi-Fi as your dev machine,
 // run `ipconfig` (Windows) / `ifconfig` (Mac/Linux) to find that IP.
-
 import Config from 'react-native-config';
 
 const BACKEND_URL = Config.BACKEND_URL; // <-- change this
 
 export type Coord = {latitude: number; longitude: number};
 
+export type TrafficSection = {
+  startIndex: number;
+  endIndex: number;
+  congestion: 'low' | 'moderate' | 'heavy';
+};
+
 export type RouteInfo = {
   coordinates: Coord[];
   distance: number; // km
-  duration: number; // minutes
+  duration: number; // minutes - traffic-aware (TomTom)
+  freeFlowDuration?: number; // minutes, no traffic
+  trafficDelay?: number; // minutes
+  trafficLengthMeters?: number;
+  liveTrafficDuration?: number;
+  trafficSections?: TrafficSection[]; // per-segment congestion, indexes into `coordinates`
   destinationAddress?: string;
 };
 
