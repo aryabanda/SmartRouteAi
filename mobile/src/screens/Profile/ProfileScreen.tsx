@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useCallback, useState} from 'react';
 import {
   SafeAreaView,
   StyleSheet,
@@ -7,63 +7,148 @@ import {
   Image,
   ScrollView,
   TouchableOpacity,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
+import {useNavigation, useFocusEffect} from '@react-navigation/native';
+import {useAuth} from '../../context/AuthContext';
+import {listJourneys, Journey} from '../../services/journeys';
 
-const menuItems = [
-  '🚨 Emergency Contacts',
-  '🤖 AI Preferences',
-  '📍 Default Locations',
-  '🔔 Notifications',
-  '🌙 Dark Mode',
-  '🔒 Privacy & Security',
-  'ℹ️ About App',
-];
+type MenuItem = {
+  label: string;
+  onPress: () => void;
+};
 
 export default function ProfileScreen() {
+  const navigation = useNavigation<any>();
+  const {user, token, logout} = useAuth();
+
+  const [journeys, setJourneys] = useState<Journey[]>([]);
+  const [loadingStats, setLoadingStats] = useState(true);
+
+  const loadStats = useCallback(async () => {
+    if (!token) {
+      setJourneys([]);
+      setLoadingStats(false);
+      return;
+    }
+    try {
+      const {journeys: fetched} = await listJourneys(token);
+      setJourneys(fetched);
+    } catch (err) {
+      console.warn('Failed to load profile stats:', err);
+    } finally {
+      setLoadingStats(false);
+    }
+  }, [token]);
+
+  // Refetch every time this tab is focused - so a journey you just
+  // finished is reflected in the stats without needing to reopen the app.
+  useFocusEffect(
+    useCallback(() => {
+      setLoadingStats(true);
+      loadStats();
+    }, [loadStats]),
+  );
+
+  const journeyCount = journeys.length;
+  const totalHours = journeys.reduce((sum, j) => sum + (j.duration_min ?? 0), 0) / 60;
+  // "Safety" here is simple and honest: the percentage of past journeys
+  // that did NOT end in an SOS. Defaults to 100% with zero journeys logged
+  // yet, rather than showing a misleading 0%/NaN for a new account.
+  const safetyPercent =
+    journeyCount === 0
+      ? 100
+      : Math.round(
+          (journeys.filter(j => j.status !== 'sos_triggered').length / journeyCount) * 100,
+        );
+
+  const avatarUrl = user
+    ? `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=2563EB&color=fff&size=150`
+    : undefined;
+
+  const handleLogout = () => {
+    Alert.alert('Log out?', 'You can log back in anytime.', [
+      {text: 'Cancel', style: 'cancel'},
+      {
+        text: 'Log out',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          navigation.reset({index: 0, routes: [{name: 'Login'}]});
+        },
+      },
+    ]);
+  };
+
+  const comingSoon = (feature: string) =>
+    Alert.alert(feature, "This isn't built yet - coming in a future update.");
+
+  const menuItems: MenuItem[] = [
+    {
+      label: '🚨 Emergency Contacts',
+      onPress: () => navigation.navigate('EmergencyContacts'),
+    },
+    {label: '🤖 AI Preferences', onPress: () => comingSoon('AI Preferences')},
+    {label: '📍 Default Locations', onPress: () => comingSoon('Default Locations')},
+    {label: '🔔 Notifications', onPress: () => comingSoon('Notifications')},
+    {label: '🌙 Dark Mode', onPress: () => comingSoon('Dark Mode')},
+    {label: '🔒 Privacy & Security', onPress: () => comingSoon('Privacy & Security')},
+    {label: 'ℹ️ About App', onPress: () => comingSoon('About App')},
+    {label: '🚪 Log Out', onPress: handleLogout},
+  ];
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
 
         <View style={styles.profileCard}>
-          <Image
-            source={{
-              uri: 'https://i.pravatar.cc/150?img=12',
-            }}
-            style={styles.avatar}
-          />
+          {avatarUrl && (
+            <Image source={{uri: avatarUrl}} style={styles.avatar} />
+          )}
 
-          <Text style={styles.name}>Arya Banda</Text>
+          <Text style={styles.name}>{user?.name ?? 'Loading...'}</Text>
 
-          <Text style={styles.email}>
-            arya@example.com
-          </Text>
+          <Text style={styles.email}>{user?.email ?? ''}</Text>
         </View>
 
         <View style={styles.statsContainer}>
-
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>46</Text>
+            {loadingStats ? (
+              <ActivityIndicator size="small" color="#2563EB" />
+            ) : (
+              <Text style={styles.statNumber}>{journeyCount}</Text>
+            )}
             <Text style={styles.statTitle}>Journeys</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>98%</Text>
+            {loadingStats ? (
+              <ActivityIndicator size="small" color="#2563EB" />
+            ) : (
+              <Text style={styles.statNumber}>{safetyPercent}%</Text>
+            )}
             <Text style={styles.statTitle}>Safety</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>214</Text>
+            {loadingStats ? (
+              <ActivityIndicator size="small" color="#2563EB" />
+            ) : (
+              <Text style={styles.statNumber}>{totalHours.toFixed(1)}</Text>
+            )}
             <Text style={styles.statTitle}>Hours</Text>
           </View>
-
         </View>
 
         <View style={styles.menuCard}>
           {menuItems.map((item, index) => (
             <TouchableOpacity
               key={index}
-              style={styles.menuItem}>
-              <Text style={styles.menuText}>{item}</Text>
+              style={styles.menuItem}
+              onPress={item.onPress}
+            >
+              <Text style={styles.menuText}>{item.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -115,6 +200,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     elevation: 3,
+    minHeight: 66,
+    justifyContent: 'center',
   },
 
   statNumber: {
